@@ -12,7 +12,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- КОНСТАНТЫ ---
-# Теперь ищем ключ GROQ
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if GROQ_API_KEY:
@@ -25,8 +24,8 @@ else:
     logger.error("GROQ_API_KEY не найден в переменных окружения!")
     client = None
 
-# Модель Llama-3-70b (самая умная из доступных бесплатно на Groq)
-MODEL_NAME = "llama3-70b-8192"
+# ОБНОВЛЕНИЕ: Используем новейшую модель Llama 3.3 (вместо устаревшей Llama 3)
+MODEL_NAME = "llama-3.3-70b-versatile"
 
 # --- ФУНКЦИИ АУДИО (Google Speech - без изменений) ---
 
@@ -66,8 +65,7 @@ async def transcribe_voice_google(audio_bytes: bytes) -> str:
 
 async def correct_text_with_gemini(raw_text: str) -> str:
     """
-    Коррекция текста через Groq (Llama 3).
-    Имя функции старое для совместимости.
+    Коррекция текста через Groq (Llama 3.3).
     """
     if not client:
         return "Ошибка: Не настроен API ключ Groq."
@@ -89,7 +87,7 @@ async def correct_text_with_gemini(raw_text: str) -> str:
                 {"role": "user", "content": raw_text},
             ],
             stream=False,
-            temperature=0.1 # Минимум фантазии, максимум точности
+            temperature=0.1
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
