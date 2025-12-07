@@ -117,14 +117,21 @@ async def voice_handler(message: types.Message):
         user_last_context[user_id] = {'raw': raw_text, 'corrected': corrected_text}
         final_text = header + corrected_text
 
+        # 1. Удаляем сообщение "Слушаю/Исправляю"
         await processing_msg.delete()
         
-        # Разбивка длинных сообщений
+        # 2. Разбивка длинных сообщений и отправка
         if len(final_text) > 4096:
             for x in range(0, len(final_text), 4096):
                 await message.answer(final_text[x:x+4096], parse_mode="HTML")
         else:
             await message.answer(final_text, parse_mode="HTML")
+        
+        # 3. АВТОУДАЛЕНИЕ ИСХОДНИКА
+        try:
+            await message.delete()
+        except Exception:
+            pass # Если нет прав или уже удалено
 
     except Exception as e:
         logger.error(f"Voice error: {e}")
@@ -151,8 +158,19 @@ async def text_handler(message: types.Message):
         corrected_text = await correct_text_with_gemini(text)
         user_last_context[user_id] = {'raw': text, 'corrected': corrected_text}
         final_text = header + corrected_text
+        
+        # 1. Удаляем "Редактирую..."
         await processing_msg.delete()
+        
+        # 2. Отправляем результат
         await message.answer(final_text, parse_mode="HTML")
+
+        # 3. АВТОУДАЛЕНИЕ ИСХОДНИКА
+        try:
+            await message.delete()
+        except Exception:
+            pass # Если нет прав или уже удалено
+
     except Exception as e:
         logger.error(f"Text error: {e}")
         await processing_msg.edit_text("❌ Ошибка.")
