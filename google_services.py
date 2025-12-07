@@ -3,7 +3,7 @@ import os
 import io
 import logging
 import asyncio
-from openai import AsyncOpenAI  # Используем клиент OpenAI для DeepSeek
+from openai import AsyncOpenAI  # Библиотека OpenAI для доступа к DeepSeek
 import speech_recognition as sr
 from pydub import AudioSegment
 
@@ -12,20 +12,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- КОНСТАНТЫ ---
-# Теперь ищем ключ DeepSeek
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 
 if DEEPSEEK_API_KEY:
-    # Инициализация клиента DeepSeek
+    # Инициализируем АСИНХРОННОГО клиента
     client = AsyncOpenAI(
         api_key=DEEPSEEK_API_KEY,
-        base_url="https://api.deepseek.com"  # Официальный адрес API DeepSeek
+        base_url="https://api.deepseek.com"
     )
 else:
     logger.error("DEEPSEEK_API_KEY не найден в переменных окружения!")
     client = None
 
-# --- ФУНКЦИИ АУДИО (Оставляем Google Speech Recognition - он бесплатный и без ключа) ---
+# --- ФУНКЦИИ АУДИО (Google Speech Recognition - бесплатно, без ключа) ---
 
 def convert_ogg_to_wav(ogg_bytes: bytes) -> io.BytesIO:
     """Конвертирует OGG (Telegram) в WAV"""
@@ -40,7 +39,7 @@ def convert_ogg_to_wav(ogg_bytes: bytes) -> io.BytesIO:
         raise e
 
 def recognize_google_sync(wav_io: io.BytesIO, language="ru-RU") -> str:
-    """Синхронное распознавание через Google Web Speech API (публичный, без ключа)"""
+    """Синхронное распознавание через Google Web Speech API"""
     recognizer = sr.Recognizer()
     with sr.AudioFile(wav_io) as source:
         audio_data = recognizer.record(source)
@@ -67,7 +66,7 @@ async def transcribe_voice_google(audio_bytes: bytes) -> str:
 async def correct_text_with_gemini(raw_text: str) -> str:
     """
     Коррекция текста через DeepSeek.
-    Название функции оставил старое, чтобы не ломать bot.py
+    Имя функции сохранено для совместимости с bot.py
     """
     if not client:
         return "Ошибка: Не настроен API ключ DeepSeek."
@@ -78,18 +77,18 @@ async def correct_text_with_gemini(raw_text: str) -> str:
         "1. Исправить орфографические, пунктуационные и грамматические ошибки.\n"
         "2. Разбить текст на предложения (точки, заглавные буквы).\n"
         "3. Удалить мусорные слова (эээ, типа, ну), если они не несут смысла.\n"
-        "4. В ответе вернуть ТОЛЬКО исправленный текст."
+        "4. В ответе вернуть ТОЛЬКО исправленный текст без кавычек и вступлений."
     )
 
     try:
         response = await client.chat.completions.create(
-            model="deepseek-chat", # Основная модель DeepSeek V3 (дешевая и мощная)
+            model="deepseek-chat",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": raw_text},
             ],
             stream=False,
-            temperature=0.3
+            temperature=0.3 # Низкая температура для точности
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
