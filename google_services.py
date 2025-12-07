@@ -3,8 +3,8 @@ import os
 import io
 import logging
 import asyncio
-from google import genai # Новый импорт
-from google.genai import types # Типы для конфигурации
+from google import genai
+from google.genai import types
 import speech_recognition as sr
 from pydub import AudioSegment
 
@@ -15,13 +15,21 @@ logger = logging.getLogger(__name__)
 # --- КОНСТАНТЫ ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Инициализация клиента новой библиотеки
-# Если ключа нет, клиент не создастся и упадет ошибка позже, это нормально для отладки
+# Инициализация клиента
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
 else:
     logger.error("GEMINI_API_KEY не найден в переменных окружения!")
     client = None
+
+# Список моделей для перебора (от самой новой к старой)
+MODELS_TO_TRY = [
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+    "gemini-pro"  # Самая старая, но надежная
+]
 
 # --- ФУНКЦИИ ---
 
@@ -43,7 +51,7 @@ def recognize_google_sync(wav_io: io.BytesIO, language="ru-RU") -> str:
     with sr.AudioFile(wav_io) as source:
         audio_data = recognizer.record(source)
         try:
-            # Используем публичный API Google (бесплатный, не требует ключа Cloud)
+            # Используем публичный API Google (бесплатный)
             text = recognizer.recognize_google(audio_data, language=language)
             return text
         except sr.UnknownValueError:
@@ -62,11 +70,33 @@ async def transcribe_voice_google(audio_bytes: bytes) -> str:
     except Exception as e:
         return f"Ошибка при обработке голоса: {e}"
 
-async def correct_text_with_gemini(raw_text: str) -> str:
-    """Коррекция текста через Google Gemini (New SDK)"""
+async def generate_content_safe(prompt: str) -> str:
+    """Функция, которая перебирает модели, пока не найдет рабочую"""
     if not client:
         return "Ошибка: API ключ не настроен."
 
+    last_error = ""
+    
+    # Перебираем модели по очереди
+    for model_name in MODELS_TO_TRY:
+        try:
+            # logger.info(f"Пробуем модель: {model_name}")
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            return response.text.strip()
+        except Exception as e:
+            # Если ошибка 404 или другая, запоминаем и идем к следующей модели
+            last_error = str(e)
+            continue
+    
+    # Если ни одна модель не сработала
+    logger.error(f"Все модели недоступны. Последняя ошибка: {last_error}")
+    return f"Не удалось обработать запрос. Ошибка API: {last_error}"
+
+async def correct_text_with_gemini(raw_text: str) -> str:
+    """Коррекция текста"""
     prompt = (
         "Ты — профессиональный редактор. Твоя задача отредактировать текст пользователя.\n"
         "Правила:\n"
@@ -76,34 +106,14 @@ async def correct_text_with_gemini(raw_text: str) -> str:
         "4. Верни ТОЛЬКО исправленный текст без кавычек и вступлений.\n\n"
         f"Текст: {raw_text}"
     )
-    
-    try:
-        # Новый синтаксис: client.aio.models.generate_content
-        response = await client.aio.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"Gemini Error: {e}")
-        return f"Ошибка нейросети: {e}"
+    return await generate_content_safe(prompt)
 
 async def explain_correction_gemini(raw_text: str, corrected_text: str, user_question: str) -> str:
-    """Объяснение правок (New SDK)"""
-    if not client:
-        return "Ошибка: API ключ не настроен."
-
+    """Объяснение правок"""
     prompt = (
         "Ты — учитель русского языка. Объясни правку.\n"
         f"Было: {raw_text}\n"
         f"Стало: {corrected_text}\n"
         f"Вопрос: {user_question}\n"
     )
-    try:
-        response = await client.aio.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt
-        )
-        return response.text.strip()
-    except Exception as e:
-        return f"Ошибка: {e}"
+    return await generate_content_safe(prompt)
