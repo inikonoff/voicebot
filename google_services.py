@@ -3,7 +3,7 @@ import os
 import io
 import logging
 import asyncio
-from openai import AsyncOpenAI  # Библиотека OpenAI для доступа к DeepSeek
+from openai import AsyncOpenAI
 import speech_recognition as sr
 from pydub import AudioSegment
 
@@ -12,22 +12,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- КОНСТАНТЫ ---
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+# Теперь ищем ключ GROQ
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-if DEEPSEEK_API_KEY:
-    # Инициализируем АСИНХРОННОГО клиента
+if GROQ_API_KEY:
+    # Настройка клиента для Groq
     client = AsyncOpenAI(
-        api_key=DEEPSEEK_API_KEY,
-        base_url="https://api.deepseek.com"
+        api_key=GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1"
     )
 else:
-    logger.error("DEEPSEEK_API_KEY не найден в переменных окружения!")
+    logger.error("GROQ_API_KEY не найден в переменных окружения!")
     client = None
 
-# --- ФУНКЦИИ АУДИО (Google Speech Recognition - бесплатно, без ключа) ---
+# Модель Llama-3-70b (самая умная из доступных бесплатно на Groq)
+MODEL_NAME = "llama3-70b-8192"
+
+# --- ФУНКЦИИ АУДИО (Google Speech - без изменений) ---
 
 def convert_ogg_to_wav(ogg_bytes: bytes) -> io.BytesIO:
-    """Конвертирует OGG (Telegram) в WAV"""
     try:
         audio = AudioSegment.from_ogg(io.BytesIO(ogg_bytes))
         wav_io = io.BytesIO()
@@ -39,7 +42,6 @@ def convert_ogg_to_wav(ogg_bytes: bytes) -> io.BytesIO:
         raise e
 
 def recognize_google_sync(wav_io: io.BytesIO, language="ru-RU") -> str:
-    """Синхронное распознавание через Google Web Speech API"""
     recognizer = sr.Recognizer()
     with sr.AudioFile(wav_io) as source:
         audio_data = recognizer.record(source)
@@ -51,7 +53,6 @@ def recognize_google_sync(wav_io: io.BytesIO, language="ru-RU") -> str:
             return f"Ошибка сервиса распознавания: {e}"
 
 async def transcribe_voice_google(audio_bytes: bytes) -> str:
-    """Асинхронная обертка для распознавания голоса"""
     try:
         wav_io = await asyncio.to_thread(convert_ogg_to_wav, audio_bytes)
         text = await asyncio.to_thread(recognize_google_sync, wav_io)
@@ -61,46 +62,46 @@ async def transcribe_voice_google(audio_bytes: bytes) -> str:
     except Exception as e:
         return f"Ошибка при обработке голоса: {e}"
 
-# --- ФУНКЦИИ DEEPSEEK (ТЕКСТ) ---
+# --- ФУНКЦИИ GROQ (ТЕКСТ) ---
 
 async def correct_text_with_gemini(raw_text: str) -> str:
     """
-    Коррекция текста через DeepSeek.
-    Имя функции сохранено для совместимости с bot.py
+    Коррекция текста через Groq (Llama 3).
+    Имя функции старое для совместимости.
     """
     if not client:
-        return "Ошибка: Не настроен API ключ DeepSeek."
+        return "Ошибка: Не настроен API ключ Groq."
 
     system_prompt = (
-        "Ты — профессиональный редактор и корректор русского языка.\n"
+        "Ты — профессиональный редактор русского языка.\n"
         "Твоя задача:\n"
         "1. Исправить орфографические, пунктуационные и грамматические ошибки.\n"
         "2. Разбить текст на предложения (точки, заглавные буквы).\n"
         "3. Удалить мусорные слова (эээ, типа, ну), если они не несут смысла.\n"
-        "4. В ответе вернуть ТОЛЬКО исправленный текст без кавычек и вступлений."
+        "4. Верни ТОЛЬКО исправленный текст без вступлений и кавычек."
     )
 
     try:
         response = await client.chat.completions.create(
-            model="deepseek-chat",
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": raw_text},
             ],
             stream=False,
-            temperature=0.3 # Низкая температура для точности
+            temperature=0.1 # Минимум фантазии, максимум точности
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logger.error(f"DeepSeek Error: {e}")
+        logger.error(f"Groq Error: {e}")
         return f"Ошибка нейросети: {e}"
 
 async def explain_correction_gemini(raw_text: str, corrected_text: str, user_question: str) -> str:
-    """Объяснение правок через DeepSeek"""
+    """Объяснение правок через Groq"""
     if not client:
-        return "Ошибка: Не настроен API ключ DeepSeek."
+        return "Ошибка: Не настроен API ключ Groq."
 
-    system_prompt = "Ты — дружелюбный учитель русского языка. Твоя цель — кратко объяснить правило."
+    system_prompt = "Ты — учитель русского языка. Кратко объясни правило."
     
     user_message = (
         f"Исходный текст: {raw_text}\n"
@@ -110,7 +111,7 @@ async def explain_correction_gemini(raw_text: str, corrected_text: str, user_que
 
     try:
         response = await client.chat.completions.create(
-            model="deepseek-chat",
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -119,4 +120,4 @@ async def explain_correction_gemini(raw_text: str, corrected_text: str, user_que
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"Ошибка при запросе к DeepSeek: {e}"
+        return f"Ошибка при запросе к Groq: {e}"
