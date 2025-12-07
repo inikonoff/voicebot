@@ -3,7 +3,8 @@ import os
 import io
 import logging
 import asyncio
-import google.generativeai as genai
+from google import genai # Новый импорт
+from google.genai import types # Типы для конфигурации
 import speech_recognition as sr
 from pydub import AudioSegment
 
@@ -12,14 +13,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- КОНСТАНТЫ ---
-# Ключ Gemini (берем из переменных окружения или используем твой по умолчанию)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAItxTpB4VkgfqJewRrKt9oJRoVz0o87OM")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Настройка Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Настройка модели (используем flash для скорости и бесплатности)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Инициализация клиента новой библиотеки
+# Если ключа нет, клиент не создастся и упадет ошибка позже, это нормально для отладки
+if GEMINI_API_KEY:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    logger.error("GEMINI_API_KEY не найден в переменных окружения!")
+    client = None
 
 # --- ФУНКЦИИ ---
 
@@ -32,32 +34,28 @@ def convert_ogg_to_wav(ogg_bytes: bytes) -> io.BytesIO:
         wav_io.seek(0)
         return wav_io
     except Exception as e:
-        logger.error(f"Ошибка конвертации аудио: {e}")
+        logger.error(f"Ошибка конвертации аудио (FFmpeg установлен?): {e}")
         raise e
 
 def recognize_google_sync(wav_io: io.BytesIO, language="ru-RU") -> str:
     """Синхронная функция распознавания через Google Web Speech API"""
     recognizer = sr.Recognizer()
     with sr.AudioFile(wav_io) as source:
-        audio_data = recognizer.record(source) # Читаем весь файл
+        audio_data = recognizer.record(source)
         try:
-            # Используем публичный API Google (бесплатный)
+            # Используем публичный API Google (бесплатный, не требует ключа Cloud)
             text = recognizer.recognize_google(audio_data, language=language)
             return text
         except sr.UnknownValueError:
-            return "" # Речь не распознана
+            return ""
         except sr.RequestError as e:
-            return f"Ошибка сервиса Google: {e}"
+            return f"Ошибка сервиса распознавания: {e}"
 
 async def transcribe_voice_google(audio_bytes: bytes) -> str:
     """Асинхронная обертка для распознавания голоса"""
     try:
-        # 1. Конвертация (в отдельном потоке, чтобы не блокировать бота)
         wav_io = await asyncio.to_thread(convert_ogg_to_wav, audio_bytes)
-        
-        # 2. Распознавание (в отдельном потоке)
         text = await asyncio.to_thread(recognize_google_sync, wav_io)
-        
         if not text:
             return "Не удалось разобрать речь (тишина или неразборчиво)."
         return text
@@ -65,38 +63,47 @@ async def transcribe_voice_google(audio_bytes: bytes) -> str:
         return f"Ошибка при обработке голоса: {e}"
 
 async def correct_text_with_gemini(raw_text: str) -> str:
-    """Коррекция текста через Google Gemini"""
-    
-    prompt = (
-        "Ты — профессиональный редактор и корректор. Твоя задача отредактировать текст пользователя.\n"
-        "Правила:\n"
-        "1. Исправь все орфографические, пунктуационные и грамматические ошибки.\n"
-        "2. Разбей текст на логические предложения. Обязательно ставь точки и заглавные буквы.\n"
-        "3. Удали мусорные слова (э-э, ну, типа, короче), если они не несут смысла.\n"
-        "4. Смягчи грубые выражения, если они есть, до литературных аналогов.\n"
-        "5. Верни ТОЛЬКО исправленный текст без кавычек, без вступлений типа 'Вот исправленный текст'.\n\n"
-        f"Текст для обработки:\n{raw_text}"
-    )
+    """Коррекция текста через Google Gemini (New SDK)"""
+    if not client:
+        return "Ошибка: API ключ не настроен."
 
+    prompt = (
+        "Ты — профессиональный редактор. Твоя задача отредактировать текст пользователя.\n"
+        "Правила:\n"
+        "1. Исправь орфографические, пунктуационные и грамматические ошибки.\n"
+        "2. Разбей текст на предложения. Обязательно ставь точки и заглавные буквы.\n"
+        "3. Удали слова-паразиты (ну, типа, эээ), если они не несут смысла.\n"
+        "4. Верни ТОЛЬКО исправленный текст без кавычек и вступлений.\n\n"
+        f"Текст: {raw_text}"
+    )
+    
     try:
-        response = await model.generate_content_async(prompt)
+        # Новый синтаксис: client.aio.models.generate_content
+        response = await client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         return response.text.strip()
     except Exception as e:
         logger.error(f"Gemini Error: {e}")
         return f"Ошибка нейросети: {e}"
 
 async def explain_correction_gemini(raw_text: str, corrected_text: str, user_question: str) -> str:
-    """Объяснение правок через Gemini"""
+    """Объяснение правок (New SDK)"""
+    if not client:
+        return "Ошибка: API ключ не настроен."
+
     prompt = (
-        "Ты — учитель русского языка. Пользователь хочет узнать, почему ты исправил текст именно так.\n"
-        f"Исходный текст: {raw_text}\n"
-        f"Исправленный текст: {corrected_text}\n"
-        f"Вопрос пользователя: {user_question}\n\n"
-        "Объясни кратко и понятно правило."
+        "Ты — учитель русского языка. Объясни правку.\n"
+        f"Было: {raw_text}\n"
+        f"Стало: {corrected_text}\n"
+        f"Вопрос: {user_question}\n"
     )
-    
     try:
-        response = await model.generate_content_async(prompt)
+        response = await client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         return response.text.strip()
     except Exception as e:
-        return f"Не удалось получить объяснение: {e}"
+        return f"Ошибка: {e}"
